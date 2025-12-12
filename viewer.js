@@ -169,6 +169,16 @@ function getProjectionMatrix(fx, fy, width, height) {
 }
 
 function getViewMatrix(camera) {
+    // 카메라 정보가 없으면 단위 행렬 리턴해서 크래시 방지
+    if (!camera || !camera.rotation || !camera.position) {
+        return [
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1,
+        ];
+    }
+
     const R = camera.rotation.flat();
     const t = camera.position;
     const camToWorld = [
@@ -184,6 +194,7 @@ function getViewMatrix(camera) {
     ].flat();
     return camToWorld;
 }
+
 // function translate4(a, x, y, z) {
 //     return [
 //         ...a.slice(0, 12),
@@ -849,6 +860,7 @@ async function main() {
     gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);
     gl.vertexAttribIPointer(a_index, 1, gl.INT, false, 0, 0);
 
+
     // resize
     function resize() {
         const dpr = devicePixelRatio;
@@ -868,6 +880,11 @@ async function main() {
 
             gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
 
+            // 카메라 정보가 없으면 여기서 그냥 리턴해서 fx/fy 에러 방지
+            if (!camera || camera.fx == null || camera.fy == null) {
+                return;
+            }
+
             const focal = [camera.fx, camera.fy];
             gl.uniform2fv(u_focal, focal);
 
@@ -884,6 +901,7 @@ async function main() {
             gl.uniformMatrix4fv(u_projection, false, projectionMatrix);
         }
     }
+
 
     worker.onmessage = (e) => {
         if (e.data.buffer) {
@@ -1148,19 +1166,22 @@ async function main() {
 
     window.addEventListener("resize", resize);
 
-    document
-        .getElementById("filepicker")
-        .addEventListener("change", (event) => {
+    const fileInput = document.getElementById("filepicker");
+    if (fileInput) {
+        fileInput.addEventListener("change", (event) => {
             const fileList = event.target.files;
             if (!fileList || !fileList.length) return;
             readFile(fileList[0]);
         });
+    }
 
-    document
-        .getElementById("selectfiles")
-        .addEventListener("click", () => {
-            document.getElementById("filepicker").click();
+    const selectBtn = document.getElementById("selectfiles");
+    if (selectBtn && fileInput) {
+        selectBtn.addEventListener("click", () => {
+            fileInput.click();
         });
+    }
+
 
     function readFile(file) {
         const reader = new FileReader();
