@@ -1480,5 +1480,5 @@ async function main() {
 
 main().catch((err) => {
     document.getElementById("spinner").style.display = "none";
-    console.error(err);
+    document.getElementById("message").innerText = err.toString();
 });
