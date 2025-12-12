@@ -758,8 +758,10 @@ async function main() {
         throw new Error(req.status + " Unable to load " + req.url);
 
     const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
-    const reader = req.body.getReader();
-    let splatData = new Uint8Array(req.headers.get("content-length"));
+
+    // 전체 파일을 ArrayBuffer로 한 번에 읽어온다 (스트리밍 X)
+    const arrayBuffer = await req.arrayBuffer();
+    let splatData = new Uint8Array(arrayBuffer);
 
     const downsample =
         splatData.length / rowLength > 500000 ? 1 : 1 / devicePixelRatio;
@@ -806,7 +808,11 @@ async function main() {
 
     gl.disable(gl.DEPTH_TEST); // Disable depth testing
 
-    // Enable blending
+    gl.clearColor(0, 0, 0, 0);
+    // gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    gl.disable(gl.CULL_FACE);
     gl.enable(gl.BLEND);
     gl.blendFuncSeparate(
         gl.ONE_MINUS_DST_ALPHA,
@@ -842,29 +848,42 @@ async function main() {
     gl.enableVertexAttribArray(a_index);
     gl.bindBuffer(gl.ARRAY_BUFFER, indexBuffer);
     gl.vertexAttribIPointer(a_index, 1, gl.INT, false, 0, 0);
-    gl.vertexAttribDivisor(a_index, 1);
 
-    const resize = () => {
-        gl.uniform2fv(u_focal, new Float32Array([camera.fx, camera.fy]));
+    // resize
+    function resize() {
+        const dpr = devicePixelRatio;
+        let width, height;
 
-        projectionMatrix = getProjectionMatrix(
-            camera.fx,
-            camera.fy,
-            innerWidth,
-            innerHeight,
-        );
+        if (canvas.clientWidth) {
+            width = canvas.clientWidth;
+            height = canvas.clientHeight;
+        } else {
+            width = window.innerWidth;
+            height = window.innerHeight;
+        }
 
-        gl.uniform2fv(u_viewport, new Float32Array([innerWidth, innerHeight]));
+        if (canvas.width != width || canvas.height != height) {
+            canvas.width = width * dpr;
+            canvas.height = height * dpr;
 
-        gl.canvas.width = Math.round(innerWidth / downsample);
-        gl.canvas.height = Math.round(innerHeight / downsample);
-        gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+            gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
 
-        gl.uniformMatrix4fv(u_projection, false, projectionMatrix);
-    };
+            const focal = [camera.fx, camera.fy];
+            gl.uniform2fv(u_focal, focal);
 
-    window.addEventListener("resize", resize);
-    resize();
+            const viewport = [width, height];
+            gl.uniform2fv(u_viewport, viewport);
+
+            // https://webgl2fundamentals.org/webgl/lessons/webgl-3d-perspective.html
+            projectionMatrix = perspective4(
+                (camera.fx / camera.fy) * fov / 180 * Math.PI,
+                width / height,
+                0.01,
+                100,
+            );
+            gl.uniformMatrix4fv(u_projection, false, projectionMatrix);
+        }
+    }
 
     worker.onmessage = (e) => {
         if (e.data.buffer) {
@@ -935,72 +954,127 @@ async function main() {
             viewMatrix = getViewMatrix(cameras[currentCameraIndex]);
         }
         if (["+", "="].includes(e.key)) {
-            currentCameraIndex = (currentCameraIndex + 1) % cameras.length;
+            currentCameraIndex =
+                (currentCameraIndex + 1) % Math.min(10, cameras.length);
             viewMatrix = getViewMatrix(cameras[currentCameraIndex]);
         }
-        camid.innerText = "cam  " + currentCameraIndex;
-        if (e.code == "KeyV") {
-            location.hash =
-                "#" +
-                JSON.stringify(
-                    viewMatrix.map((k) => Math.round(k * 100) / 100),
-                );
-            camid.innerText = "";
-        } else if (e.code === "KeyP") {
-            carousel = true;
-            camid.innerText = "";
+        if (["KeyR"].includes(e.code)) {
+            viewMatrix = null;
         }
-    });
-    window.addEventListener("keyup", (e) => {
-        activeKeys = activeKeys.filter((k) => k !== e.code);
-    });
-    window.addEventListener("blur", () => {
-        activeKeys = [];
-    });
-
-    window.addEventListener(
-        "wheel",
-        (e) => {
+        if (["KeyP"].includes(e.code)) {
+            camid.style.display = "block";
+            camid.innerText = `${currentCameraIndex}`;
+            setTimeout(() => (camid.style.display = "none"), 1000);
+            viewMatrix = getViewMatrix(cameras[currentCameraIndex]);
             carousel = false;
-            e.preventDefault();
-            const lineHeight = 10;
-            const scale =
-                e.deltaMode == 1
-                    ? lineHeight
-                    : e.deltaMode == 2
-                      ? innerHeight
-                      : 1;
-            let inv = invert4(viewMatrix);
-            if (e.shiftKey) {
-                inv = translate4(
-                    inv,
-                    (e.deltaX * scale) / innerWidth,
-                    (e.deltaY * scale) / innerHeight,
-                    0,
-                );
-            } else if (e.ctrlKey || e.metaKey) {
-                // inv = rotate4(inv,  (e.deltaX * scale) / innerWidth,  0, 0, 1);
-                // inv = translate4(inv,  0, (e.deltaY * scale) / innerHeight, 0);
-                // let preY = inv[13];
-                inv = translate4(
-                    inv,
-                    0,
-                    0,
-                    (-10 * (e.deltaY * scale)) / innerHeight,
-                );
-                // inv[13] = preY;
-            } else {
-                let d = 4;
-                inv = translate4(inv, 0, 0, d);
-                inv = rotate4(inv, -(e.deltaX * scale) / innerWidth, 0, 1, 0);
-                inv = rotate4(inv, (e.deltaY * scale) / innerHeight, 1, 0, 0);
-                inv = translate4(inv, 0, 0, -d);
-            }
+        }
+        // console.log(e);
+    });
 
-            viewMatrix = invert4(inv);
+    window.addEventListener("keyup", (e) => {
+        // if (document.activeElement != document.body) return;
+
+        const idx = activeKeys.indexOf(e.code);
+        if (idx >= 0) activeKeys.splice(idx, 1);
+    });
+
+    function endMove() {
+        if (!mouseOpLock) {
+            canvas.style.cursor = "default";
+        }
+
+        down = 0;
+    }
+
+    document.body.addEventListener("mouseup", endMove);
+    document.body.addEventListener("mouseleave", endMove);
+    document.addEventListener(
+        "keyup",
+        (event) => {
+            if (event.code === "Escape") {
+                mouseOpLock = !mouseOpLock;
+                if (mouseOpLock) {
+                    canvas.style.cursor = "none";
+                    down = 1;
+                } else {
+                    canvas.style.cursor = "default";
+                    down = 0;
+                }
+            }
         },
         { passive: false },
     );
+
+    window.addEventListener("blur", () => {
+        activeKeys = [];
+        mouseOpLock = false;
+    });
+
+    let touches = [];
+    window.addEventListener("touchstart", (e) => {
+        touches = [
+            { x: e.touches[0].clientX, y: e.touches[0].clientY },
+            { x: e.touches[1].clientX, y: e.touches[1].clientY },
+        ].slice(0, e.touches.length);
+    });
+
+    window.addEventListener(
+        "touchmove",
+        (e) => {
+            // if (document.activeElement != document.body) return;
+
+            e.preventDefault();
+            carousel = false;
+            let inv = invert4(viewMatrix);
+
+            if (e.touches.length === 1) {
+                const [prev] = touches;
+                const dx =
+                    (3 * (e.touches[0].clientX - prev.x)) / innerWidth;
+                const dy =
+                    (3 * (e.touches[0].clientY - prev.y)) / innerHeight;
+                inv = translate4(inv, dx, -dy, 0);
+
+                viewMatrix = invert4(inv);
+
+                touches = [
+                    { x: e.touches[0].clientX, y: e.touches[0].clientY },
+                ];
+            } else if (e.touches.length === 2) {
+                const [prev1, prev2] = touches;
+                const dx =
+                    (e.touches[0].clientX + e.touches[1].clientX - prev1.x - prev2.x) /
+                    innerWidth;
+                const dy =
+                    (e.touches[0].clientY + e.touches[1].clientY - prev1.y - prev2.y) /
+                    innerHeight;
+
+                const dscale =
+                    Math.hypot(prev1.x - prev2.x, prev1.y - prev2.y) /
+                    Math.hypot(
+                        e.touches[0].clientX - e.touches[1].clientX,
+                        e.touches[0].clientY - e.touches[1].clientY,
+                    );
+
+                inv = translate4(inv, dx, -dy, 0);
+                inv = translate4(inv, 0, 0, 4);
+                inv = scale4(inv, dscale, dscale, dscale);
+                inv = translate4(inv, 0, 0, -4);
+
+                viewMatrix = invert4(inv);
+
+                touches = [
+                    { x: e.touches[0].clientX, y: e.touches[0].clientY },
+                    { x: e.touches[1].clientX, y: e.touches[1].clientY },
+                ];
+            }
+        },
+        { passive: false },
+    );
+
+    window.addEventListener("touchend", () => {
+        touches = [];
+    });
 
     let startX, startY, down;
     canvas.addEventListener("mousedown", (e) => {
@@ -1024,459 +1098,114 @@ async function main() {
             let inv = invert4(viewMatrix);
             let dx = (5 * (e.clientX - startX)) / innerWidth;
             let dy = (5 * (e.clientY - startY)) / innerHeight;
-            let d = 4;
 
+            let d = 4;
             inv = translate4(inv, 0, 0, d);
             inv = rotate4(inv, dx, 0, 1, 0);
-            inv = rotate4(inv, -dy, 1, 0, 0);
+            inv = rotate4(inv, dy, 1, 0, 0);
             inv = translate4(inv, 0, 0, -d);
-            // let postAngle = Math.atan2(inv[0], inv[10])
-            // inv = rotate4(inv, postAngle - preAngle, 0, 0, 1)
-            // console.log(postAngle)
+
             viewMatrix = invert4(inv);
 
             startX = e.clientX;
             startY = e.clientY;
         } else if (down == 2) {
             let inv = invert4(viewMatrix);
-            // inv = rotateY(inv, );
-            // let preY = inv[13];
-            inv = translate4(
-                inv,
-                (-10 * (e.clientX - startX)) / innerWidth,
-                0,
-                (10 * (e.clientY - startY)) / innerHeight,
-            );
-            // inv[13] = preY;
-            viewMatrix = invert4(inv);
+            let dx = (2 * (e.clientX - startX)) / innerWidth;
+            let dy = (2 * (e.clientY - startY)) / innerHeight;
 
             startX = e.clientX;
             startY = e.clientY;
+
+            inv = translate4(inv, dx, -dy, 0);
+            viewMatrix = invert4(inv);
         }
     });
     canvas.addEventListener("mouseup", (e) => {
         e.preventDefault();
-        down = false;
-        startX = 0;
-        startY = 0;
+        down = 0;
     });
 
-    let altX = 0,
-        altY = 0;
-    canvas.addEventListener(
-        "touchstart",
-        (e) => {
-            e.preventDefault();
-            if (e.touches.length === 1) {
-                carousel = false;
-                startX = e.touches[0].clientX;
-                startY = e.touches[0].clientY;
-                down = 1;
-            } else if (e.touches.length === 2) {
-                // console.log('beep')
-                carousel = false;
-                startX = e.touches[0].clientX;
-                altX = e.touches[1].clientX;
-                startY = e.touches[0].clientY;
-                altY = e.touches[1].clientY;
-                down = 1;
-            }
-        },
-        { passive: false },
-    );
-    canvas.addEventListener(
-        "touchmove",
-        (e) => {
-            e.preventDefault();
-            if (e.touches.length === 1 && down) {
-                let inv = invert4(viewMatrix);
-                let dx = (4 * (e.touches[0].clientX - startX)) / innerWidth;
-                let dy = (4 * (e.touches[0].clientY - startY)) / innerHeight;
-
-                let d = 4;
-                inv = translate4(inv, 0, 0, d);
-                // inv = translate4(inv,  -x, -y, -z);
-                // inv = translate4(inv,  x, y, z);
-                inv = rotate4(inv, dx, 0, 1, 0);
-                inv = rotate4(inv, -dy, 1, 0, 0);
-                inv = translate4(inv, 0, 0, -d);
-
-                viewMatrix = invert4(inv);
-
-                startX = e.touches[0].clientX;
-                startY = e.touches[0].clientY;
-            } else if (e.touches.length === 2) {
-                // alert('beep')
-                const dtheta =
-                    Math.atan2(startY - altY, startX - altX) -
-                    Math.atan2(
-                        e.touches[0].clientY - e.touches[1].clientY,
-                        e.touches[0].clientX - e.touches[1].clientX,
-                    );
-                const dscale =
-                    Math.hypot(startX - altX, startY - altY) /
-                    Math.hypot(
-                        e.touches[0].clientX - e.touches[1].clientX,
-                        e.touches[0].clientY - e.touches[1].clientY,
-                    );
-                const dx =
-                    (e.touches[0].clientX +
-                        e.touches[1].clientX -
-                        (startX + altX)) /
-                    2;
-                const dy =
-                    (e.touches[0].clientY +
-                        e.touches[1].clientY -
-                        (startY + altY)) /
-                    2;
-                let inv = invert4(viewMatrix);
-                // inv = translate4(inv,  0, 0, d);
-                inv = rotate4(inv, dtheta, 0, 0, 1);
-
-                inv = translate4(inv, -dx / innerWidth, -dy / innerHeight, 0);
-
-                // let preY = inv[13];
-                inv = translate4(inv, 0, 0, 3 * (1 - dscale));
-                // inv[13] = preY;
-
-                viewMatrix = invert4(inv);
-
-                startX = e.touches[0].clientX;
-                altX = e.touches[1].clientX;
-                startY = e.touches[0].clientY;
-                altY = e.touches[1].clientY;
-            }
-        },
-        { passive: false },
-    );
-    canvas.addEventListener(
-        "touchend",
-        (e) => {
-            e.preventDefault();
-            down = false;
-            startX = 0;
-            startY = 0;
-        },
-        { passive: false },
-    );
-
-    let jumpDelta = 0;
-    let vertexCount = 0;
-
-    let lastFrame = 0;
-    let avgFps = 0;
-    let start = 0;
-
-    window.addEventListener("gamepadconnected", (e) => {
-        const gp = navigator.getGamepads()[e.gamepad.index];
-        console.log(
-            `Gamepad connected at index ${gp.index}: ${gp.id}. It has ${gp.buttons.length} buttons and ${gp.axes.length} axes.`,
-        );
-    });
-    window.addEventListener("gamepaddisconnected", (e) => {
-        console.log("Gamepad disconnected");
-    });
-
-    let leftGamepadTrigger, rightGamepadTrigger;
-
-    const frame = (now) => {
+    canvas.addEventListener("wheel", (e) => {
+        carousel = false;
         let inv = invert4(viewMatrix);
-        let shiftKey =
-            activeKeys.includes("Shift") ||
-            activeKeys.includes("ShiftLeft") ||
-            activeKeys.includes("ShiftRight");
-
-        if (activeKeys.includes("ArrowUp")) {
-            if (shiftKey) {
+        e.preventDefault();
+        if (e.ctrlKey || e.metaKey) {
+            if (e.deltaY > 0) {
                 inv = translate4(inv, 0, -0.03, 0);
             } else {
-                inv = translate4(inv, 0, 0, 0.1);
-            }
-        }
-        if (activeKeys.includes("ArrowDown")) {
-            if (shiftKey) {
                 inv = translate4(inv, 0, 0.03, 0);
+            }
+        } else {
+            if (e.deltaY > 0) {
+                inv = translate4(inv, 0, 0, 0.1);
             } else {
                 inv = translate4(inv, 0, 0, -0.1);
             }
         }
-        if (activeKeys.includes("ArrowLeft"))
-            inv = translate4(inv, -0.03, 0, 0);
-        //
-        if (activeKeys.includes("ArrowRight"))
-            inv = translate4(inv, 0.03, 0, 0);
-        // inv = rotate4(inv, 0.01, 0, 1, 0);
-        if (activeKeys.includes("KeyA")) inv = rotate4(inv, -0.01, 0, 1, 0);
-        if (activeKeys.includes("KeyD")) inv = rotate4(inv, 0.01, 0, 1, 0);
-        if (activeKeys.includes("KeyQ")) inv = rotate4(inv, 0.01, 0, 0, 1);
-        if (activeKeys.includes("KeyE")) inv = rotate4(inv, -0.01, 0, 0, 1);
-        if (activeKeys.includes("KeyW")) inv = rotate4(inv, 0.005, 1, 0, 0);
-        if (activeKeys.includes("KeyS")) inv = rotate4(inv, -0.005, 1, 0, 0);
-
-        const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-        let isJumping = activeKeys.includes("Space");
-        for (let gamepad of gamepads) {
-            if (!gamepad) continue;
-
-            const axisThreshold = 0.1; // Threshold to detect when the axis is intentionally moved
-            const moveSpeed = 0.06;
-            const rotateSpeed = 0.02;
-
-            // Assuming the left stick controls translation (axes 0 and 1)
-            if (Math.abs(gamepad.axes[0]) > axisThreshold) {
-                inv = translate4(inv, moveSpeed * gamepad.axes[0], 0, 0);
-                carousel = false;
-            }
-            if (Math.abs(gamepad.axes[1]) > axisThreshold) {
-                inv = translate4(inv, 0, 0, -moveSpeed * gamepad.axes[1]);
-                carousel = false;
-            }
-            if (gamepad.buttons[12].pressed || gamepad.buttons[13].pressed) {
-                inv = translate4(
-                    inv,
-                    0,
-                    -moveSpeed *
-                        (gamepad.buttons[12].pressed -
-                            gamepad.buttons[13].pressed),
-                    0,
-                );
-                carousel = false;
-            }
-
-            if (gamepad.buttons[14].pressed || gamepad.buttons[15].pressed) {
-                inv = translate4(
-                    inv,
-                    -moveSpeed *
-                        (gamepad.buttons[14].pressed -
-                            gamepad.buttons[15].pressed),
-                    0,
-                    0,
-                );
-                carousel = false;
-            }
-
-            // Assuming the right stick controls rotation (axes 2 and 3)
-            if (Math.abs(gamepad.axes[2]) > axisThreshold) {
-                inv = rotate4(inv, rotateSpeed * gamepad.axes[2], 0, 1, 0);
-                carousel = false;
-            }
-            if (Math.abs(gamepad.axes[3]) > axisThreshold) {
-                inv = rotate4(inv, -rotateSpeed * gamepad.axes[3], 1, 0, 0);
-                carousel = false;
-            }
-
-            let tiltAxis = gamepad.buttons[6].value - gamepad.buttons[7].value;
-            if (Math.abs(tiltAxis) > axisThreshold) {
-                inv = rotate4(inv, rotateSpeed * tiltAxis, 0, 0, 1);
-                carousel = false;
-            }
-            if (gamepad.buttons[4].pressed && !leftGamepadTrigger) {
-                camera =
-                    cameras[(cameras.indexOf(camera) + 1) % cameras.length];
-                inv = invert4(getViewMatrix(camera));
-                carousel = false;
-            }
-            if (gamepad.buttons[5].pressed && !rightGamepadTrigger) {
-                camera =
-                    cameras[
-                        (cameras.indexOf(camera) + cameras.length - 1) %
-                            cameras.length
-                    ];
-                inv = invert4(getViewMatrix(camera));
-                carousel = false;
-            }
-            leftGamepadTrigger = gamepad.buttons[4].pressed;
-            rightGamepadTrigger = gamepad.buttons[5].pressed;
-            if (gamepad.buttons[0].pressed) {
-                isJumping = true;
-                carousel = false;
-            }
-            if (gamepad.buttons[3].pressed) {
-                carousel = true;
-            }
-        }
-
-        if (
-            ["KeyJ", "KeyK", "KeyL", "KeyI"].some((k) => activeKeys.includes(k))
-        ) {
-            let d = 4;
-            inv = translate4(inv, 0, 0, d);
-            inv = rotate4(
-                inv,
-                activeKeys.includes("KeyJ")
-                    ? -0.05
-                    : activeKeys.includes("KeyL")
-                      ? 0.05
-                      : 0,
-                0,
-                1,
-                0,
-            );
-            inv = rotate4(
-                inv,
-                activeKeys.includes("KeyI")
-                    ? 0.05
-                    : activeKeys.includes("KeyK")
-                      ? -0.05
-                      : 0,
-                1,
-                0,
-                0,
-            );
-            inv = translate4(inv, 0, 0, -d);
-        }
-
         viewMatrix = invert4(inv);
-
-        if (carousel) {
-            let inv = invert4(defaultViewMatrix);
-
-            const t = Math.sin((Date.now() - start) / 5000);
-            inv = translate4(inv, 2.5 * t, 0, 6 * (1 - Math.cos(t)));
-            inv = rotate4(inv, -0.6 * t, 0, 1, 0);
-
-            viewMatrix = invert4(inv);
-        }
-
-        if (isJumping) {
-            jumpDelta = Math.min(1, jumpDelta + 0.05);
-        } else {
-            jumpDelta = Math.max(0, jumpDelta - 0.05);
-        }
-
-        let inv2 = invert4(viewMatrix);
-        inv2 = translate4(inv2, 0, -jumpDelta, 0);
-        inv2 = rotate4(inv2, -0.1 * jumpDelta, 1, 0, 0);
-        let actualViewMatrix = invert4(inv2);
-
-        const viewProj = multiply4(projectionMatrix, actualViewMatrix);
-        worker.postMessage({ view: viewProj });
-
-        const currentFps = 1000 / (now - lastFrame) || 0;
-        avgFps = avgFps * 0.9 + currentFps * 0.1;
-
-        if (vertexCount > 0) {
-            document.getElementById("spinner").style.display = "none";
-            gl.uniformMatrix4fv(u_view, false, actualViewMatrix);
-            gl.clear(gl.COLOR_BUFFER_BIT);
-            gl.drawArraysInstanced(gl.TRIANGLE_FAN, 0, 4, vertexCount);
-        } else {
-            gl.clear(gl.COLOR_BUFFER_BIT);
-            document.getElementById("spinner").style.display = "";
-            start = Date.now() + 2000;
-        }
-        const progress = (100 * vertexCount) / (splatData.length / rowLength);
-        if (progress < 100) {
-            document.getElementById("progress").style.width = progress + "%";
-        } else {
-            document.getElementById("progress").style.display = "none";
-        }
-        fps.innerText = Math.round(avgFps) + " fps";
-        if (isNaN(currentCameraIndex)) {
-            camid.innerText = "";
-        }
-        lastFrame = now;
-        requestAnimationFrame(frame);
-    };
-
-    frame();
-
-    const isPly = (splatData) =>
-        splatData[0] == 112 &&
-        splatData[1] == 108 &&
-        splatData[2] == 121 &&
-        splatData[3] == 10;
-
-    const selectFile = (file) => {
-        const fr = new FileReader();
-        if (/\.json$/i.test(file.name)) {
-            fr.onload = () => {
-                cameras = JSON.parse(fr.result);
-                viewMatrix = getViewMatrix(cameras[0]);
-                projectionMatrix = getProjectionMatrix(
-                    camera.fx / downsample,
-                    camera.fy / downsample,
-                    canvas.width,
-                    canvas.height,
-                );
-                gl.uniformMatrix4fv(u_projection, false, projectionMatrix);
-
-                console.log("Loaded Cameras");
-            };
-            fr.readAsText(file);
-        } else {
-            stopLoading = true;
-            fr.onload = () => {
-                splatData = new Uint8Array(fr.result);
-                console.log("Loaded", Math.floor(splatData.length / rowLength));
-
-                if (isPly(splatData)) {
-                    // ply file magic header means it should be handled differently
-                    worker.postMessage({ ply: splatData.buffer, save: true });
-                } else {
-                    worker.postMessage({
-                        buffer: splatData.buffer,
-                        vertexCount: Math.floor(splatData.length / rowLength),
-                    });
-                }
-            };
-            fr.readAsArrayBuffer(file);
-        }
-    };
-
-    window.addEventListener("hashchange", (e) => {
-        try {
-            viewMatrix = JSON.parse(decodeURIComponent(location.hash.slice(1)));
-            carousel = false;
-        } catch (err) {}
     });
 
-    const preventDefault = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-    };
-    document.addEventListener("dragenter", preventDefault);
-    document.addEventListener("dragover", preventDefault);
-    document.addEventListener("dragleave", preventDefault);
-    document.addEventListener("drop", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        selectFile(e.dataTransfer.files[0]);
-    });
+    window.addEventListener("resize", resize);
 
-    let bytesRead = 0;
-    let lastVertexCount = -1;
-    let stopLoading = false;
+    document
+        .getElementById("filepicker")
+        .addEventListener("change", (event) => {
+            const fileList = event.target.files;
+            if (!fileList || !fileList.length) return;
+            readFile(fileList[0]);
+        });
 
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done || stopLoading) break;
+    document
+        .getElementById("selectfiles")
+        .addEventListener("click", () => {
+            document.getElementById("filepicker").click();
+        });
 
-        splatData.set(value, bytesRead);
-        bytesRead += value.length;
-
-        if (vertexCount > lastVertexCount) {
-            if (!isPly(splatData)) {
-                worker.postMessage({
-                    buffer: splatData.buffer,
-                    vertexCount: Math.floor(bytesRead / rowLength),
-                });
-            }
-            lastVertexCount = vertexCount;
-        }
+    function readFile(file) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            let arrayBuffer = reader.result;
+            splatData = new Uint8Array(arrayBuffer);
+            worker.postMessage({ ply: splatData.buffer, save: true });
+        };
+        reader.readAsArrayBuffer(file);
     }
-    if (!stopLoading) {
-        if (isPly(splatData)) {
-            // ply file magic header means it should be handled differently
-            worker.postMessage({ ply: splatData.buffer, save: false });
-        } else {
-            worker.postMessage({
-                buffer: splatData.buffer,
-                vertexCount: Math.floor(bytesRead / rowLength),
-            });
-        }
+
+    document.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        document.body.classList.add("dragover");
+        canvas.classList.add("dragover");
+    });
+
+    function endDrag() {
+        document.body.classList.remove("dragover");
+        canvas.classList.remove("dragover");
+    }
+
+    document.addEventListener("dragleave", endDrag);
+    document.addEventListener("dragend", endDrag);
+    document.addEventListener("drop", (event) => {
+        event.preventDefault();
+        endDrag();
+
+        if (!event.dataTransfer || !event.dataTransfer.files.length) return;
+        readFile(event.dataTransfer.files[0]);
+    });
+
+    const bytesRead = splatData.length;
+
+    if (isPly(splatData)) {
+        // ply file magic header means it should be handled differently
+        worker.postMessage({ ply: splatData.buffer, save: false });
+    } else {
+        worker.postMessage({
+            buffer: splatData.buffer,
+            vertexCount: Math.floor(bytesRead / rowLength),
+        });
     }
 }
+
 
 main().catch((err) => {
     document.getElementById("spinner").style.display = "none";
