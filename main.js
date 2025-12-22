@@ -409,6 +409,11 @@ function createWorker(self) {
     }
 
     function runSort(viewProj) {
+        console.log("[runSort] buffer ctor:", buffer?.constructor?.name);
+        console.log("[runSort] byteLength:", (buffer instanceof ArrayBuffer) ? buffer.byteLength : buffer?.byteLength);
+        console.log("[runSort] byteOffset(mod4):", (ArrayBuffer.isView(buffer) ? (buffer.byteOffset % 4) : 0),
+                    "byteLength(mod4):", (((buffer instanceof ArrayBuffer) ? buffer.byteLength : buffer?.byteLength) ?? 0) % 4);
+
         if (!buffer) return;
         const f_buffer = new Float32Array(buffer);
         if (lastVertexCount == vertexCount) {
@@ -750,10 +755,9 @@ async function main() {
 
     const rowLength = 3 * 4 + 3 * 4 + 4 + 4;
     const reader = req.body.getReader();
-    let splatData = new Uint8Array(req.headers.get("content-length"));
+    let splatData = new Uint8Array(0);
 
-    const downsample =
-        splatData.length / rowLength > 500000 ? 1 : 1 / devicePixelRatio;
+    const downsample = 1;
     console.log(splatData.length / rowLength, downsample);
 
     const worker = new Worker(
@@ -1369,7 +1373,11 @@ async function main() {
         lastFrame = now;
         requestAnimationFrame(frame);
     };
-
+    
+    if (!camera) camera = cameras?.[0];
+    if (!camera) throw new Error("camera is undefined before frame()");
+    if (!viewMatrix) viewMatrix = getViewMatrix(camera);
+    
     frame();
 
     const isPly = (splatData) =>
@@ -1435,30 +1443,39 @@ async function main() {
         selectFile(e.dataTransfer.files[0]);
     });
 
+    let chunks = [];
     let bytesRead = 0;
     let lastVertexCount = -1;
     let stopLoading = false;
-
+    
     while (true) {
         const { done, value } = await reader.read();
         if (done || stopLoading) break;
-
-        splatData.set(value, bytesRead);
-        bytesRead += value.length;
-
-        if (vertexCount > lastVertexCount) {
-            if (!isPly(splatData)) {
-                worker.postMessage({
-                    buffer: splatData.buffer,
-                    vertexCount: Math.floor(bytesRead / rowLength),
-                });
-            }
-            lastVertexCount = vertexCount;
+    
+        chunks.push(value);
+        bytesRead += value.byteLength;
+    
+        const contentLengthHeader = req.headers.get("content-length");
+        const expectedBytes = contentLengthHeader ? parseInt(contentLengthHeader) : null;
+        if (expectedBytes) {
+            const progress = Math.min(100, (100 * bytesRead) / expectedBytes);
+            const bar = document.getElementById("progress");
+            if (bar) bar.style.width = progress + "%";
         }
     }
+    
     if (!stopLoading) {
+        splatData = new Uint8Array(bytesRead);
+        let offset = 0;
+        for (const c of chunks) {
+            splatData.set(c, offset);
+            offset += c.byteLength;
+        }
+    
+        downsample = splatData.length / rowLength > 500000 ? 1 : 1 / devicePixelRatio;
+        resize();
+    
         if (isPly(splatData)) {
-            // ply file magic header means it should be handled differently
             worker.postMessage({ ply: splatData.buffer, save: false });
         } else {
             worker.postMessage({
