@@ -27,7 +27,7 @@ python pipeline.py <video_data_path>
 ```
 
 **자동화 단계**
-1. **Preprocessing:** 이미지 리사이징 (1080p -> 268p) 및 데이터 정규화
+1. **Preprocessing:** 이미지 리사이징 (640p -> 320p)
 2. **SfM:** COLMAP을 통한 카메라 위치 추정
 3. **Training:** 3D Gaussian Splatting 모델 학습 (7,000 iter)
 4. **Convert:** .ply 파일을 웹 친화적인 .splat 확장자로 자동 변환
