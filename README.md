@@ -6,7 +6,19 @@
 
 ### 3) GUI 구성
 
+
+
+
 ### 4) 3D Gaussian Splatting Pipeline
+
+| Meeting Room | Ogu |
+| :---: | :---: |
+| [![MeetingRoom](./gif/MeetingRoom.gif)](https://sikk806.github.io/VanguardDT/?url=https://huggingface.co/datasets/kyungbae/ssafy-3d-splat/resolve/main/models/test2.splat) | [![Ogu](./gif/ogu.gif)](https://sikk806.github.io/VanguardDT/?url=https://huggingface.co/datasets/kyungbae/ssafy-3d-splat/resolve/main/ogu.splat) |
+| [🔗 Interactive Viewer](https://sikk806.github.io/VanguardDT/?url=https://huggingface.co/datasets/kyungbae/ssafy-3d-splat/resolve/main/models/test2.splat) | [🔗 Interactive Viewer](https://sikk806.github.io/VanguardDT/?url=https://huggingface.co/datasets/kyungbae/ssafy-3d-splat/resolve/main/ogu.splat) |
+
+> 💡 **Tip:** 움직이는 이미지를 클릭하면 실시간 3D 뷰어로 연결됩니다.
+
+</br>
 
 프로젝트에서 실시간 3D 자산 생성을 위한 **가우시안 스플래팅(Gaussian Splatting) 학습 및 배포 파이프라인** 구축 </br>
 저사양 환경(VRAM 4GB)에서의 최적화와 영상 입력부터 웹 배포까지의 **전과정 자동화**
