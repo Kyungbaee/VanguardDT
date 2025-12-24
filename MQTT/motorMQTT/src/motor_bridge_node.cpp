@@ -264,21 +264,26 @@ void MotorBridgeNode::on_timer()
     if (!mqtt_inited_) force_pub = true;
 
     // enable/estop 토글은 즉시 GUI에 보여주기
-    if (enable_ != last_mqtt_enable_ || estop_ != last_mqtt_estop_) force_pub = true;
+    if (enable_ != last_mqtt_enable_ || estop_ != last_mqtt_estop_)
+        force_pub = true;
 
     double min_period_sec = 0.0;
-    if (mqtt_rate_hz_ > 0) min_period_sec = 1.0 / (double)mqtt_rate_hz_;
+    if (mqtt_rate_hz_ > 0)
+        min_period_sec = 1.0 / (double)mqtt_rate_hz_;
 
     const auto now2 = this->now();
     const double dt = (now2 - last_mqtt_pub_time_).seconds();
 
     if (force_pub || (mqtt_rate_hz_ <= 0) || (dt >= min_period_sec)) {
-        const std::string payload = build_motor_cmd_json(cmd, enable_, estop_);
-        mqtt_.publish(mqtt_topic_, payload);
+        // 2) MQTT에만 speed=40 강제
+        rc_car::DriveCmd cmd_mqtt = cmd;
 
-        last_mqtt_pub_time_ = now2;
-        mqtt_inited_ = true;
-        last_mqtt_enable_ = enable_;
-        last_mqtt_estop_  = estop_;
+        // 안전상 estop이면 MQTT도 0 유지
+        if (!estop_) {
+            cmd_mqtt.speed = 40;   //일단 하드코딩
+        }
+
+        const std::string payload = build_motor_cmd_json(cmd_mqtt, enable_, estop_);
+        mqtt_.publish(mqtt_topic_, payload);
     }
 }
