@@ -29,6 +29,8 @@ private:
     int mqtt_port_ = 1883;
     std::string mqtt_topic_;
 
+    int mqtt_rate_hz_ = 4; 
+
     std::string cmd_vel_topic_;
     std::string enable_topic_;
     std::string estop_topic_;
@@ -49,6 +51,11 @@ private:
 
     bool uart_virtual_ = false;
     uint8_t virtual_seq_ = 0;
+
+    rclcpp::Time last_mqtt_pub_time_;
+    bool mqtt_inited_ = false;
+    bool last_mqtt_enable_ = true;
+    bool last_mqtt_estop_  = false;
 
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr sub_cmd_vel_;
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr sub_enable_;

@@ -58,6 +58,9 @@ MotorBridgeNode::MotorBridgeNode()
     speed_gain_     = this->get_parameter("speed_gain").as_double();
     steer_gain_     = this->get_parameter("steer_gain").as_double();
     send_rate_hz_   = this->get_parameter("send_rate_hz").as_int();
+    this->declare_parameter<int>("mqtt_rate_hz", 4);
+    mqtt_rate_hz_ = this->get_parameter("mqtt_rate_hz").as_int();
+    
     cmd_timeout_ms_ = this->get_parameter("cmd_timeout_ms").as_int();
     start_stm_log_  = this->get_parameter("start_stm_log").as_bool();
 
@@ -112,6 +115,8 @@ MotorBridgeNode::MotorBridgeNode()
     }
 
     last_cmd_time_ = this->now();
+    last_mqtt_pub_time_ = this->now();
+
 
     // -----------------------------
     // Timer loop: UART + MQTT
@@ -252,7 +257,28 @@ void MotorBridgeNode::on_timer()
         log_virtual_uart(v, w, cmd);
     }
 
-    // 2) MQTT publish (GUI)
-    const std::string payload = build_motor_cmd_json(cmd, enable_, estop_);
-    mqtt_.publish(mqtt_topic_, payload);
+    // 2) MQTT publish (GUI) 레이트 리밋
+    bool force_pub = false;
+
+    // 처음 1회는 무조건
+    if (!mqtt_inited_) force_pub = true;
+
+    // enable/estop 토글은 즉시 GUI에 보여주기
+    if (enable_ != last_mqtt_enable_ || estop_ != last_mqtt_estop_) force_pub = true;
+
+    double min_period_sec = 0.0;
+    if (mqtt_rate_hz_ > 0) min_period_sec = 1.0 / (double)mqtt_rate_hz_;
+
+    const auto now2 = this->now();
+    const double dt = (now2 - last_mqtt_pub_time_).seconds();
+
+    if (force_pub || (mqtt_rate_hz_ <= 0) || (dt >= min_period_sec)) {
+        const std::string payload = build_motor_cmd_json(cmd, enable_, estop_);
+        mqtt_.publish(mqtt_topic_, payload);
+
+        last_mqtt_pub_time_ = now2;
+        mqtt_inited_ = true;
+        last_mqtt_enable_ = enable_;
+        last_mqtt_estop_  = estop_;
+    }
 }
