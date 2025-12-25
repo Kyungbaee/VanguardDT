@@ -20,32 +20,39 @@ ROS 기반 SLAM/Planner가 만들어낸 **주행/지도 결과**를 받아, **ST
 
 > 자세한 내용은 폴더 내 README.md 참조
 
-## 2. SLAM + 맵 구성
+## 2. ROS2 + SLAM + 맵 구성
 
-**ROS 2 Humble** 환경에서 **RPLidar A1**을 활용하여 실내 2D Grid Map을 생성하고, **Nav2** 스택을 기반으로 자율 주행 및 경로 계획(Path Planning)을 수행합니다.
+**ROS 2 Humble** 환경에서 라이다 센서 데이터를 기반으로 위치를 추정하고, SLAM 및 내비게이션을 수행하여 자율 주행 시스템을 구축했습니다. 특히 휠 엔코더 없이 라이다 매칭 기술을 활용하여 정밀한 오도메트리를 구현했습니다.
 
-### 🛠 하드웨어 및 시스템 구성
-- **Lidar Sensor:** SLAMTEC RPLidar A1 (360도 레이저 스캔)
-- **Odometry:** `rf2o_laser_odometry` (라이다 스캔 매칭 기반 위치 추정)
-  - 휠 엔코더의 누적 오차를 보완하기 위해 라이다 데이터를 이용한 Planar Odometry 적용
-  - `odom` → `base_link` TF 브로드캐스팅 수행
+### 🛠 System Architecture
+- **OS:** Ubuntu 22.04 LTS (Raspberry Pi)
+- **Middleware:** ROS 2 Humble Hawksbill
+- **Sensor:** SLAMTEC RPLidar A1
 
-### 🗺️ 핵심 기능
-**1. 자율 탐사 (Autonomous Exploration)**
-- `explore_lite` 패키지를 활용하여 미탐사 영역(Frontier)을 자동으로 감지
-- 사용자의 수동 조작 없이 로봇이 스스로 이동 경로를 생성하며 전체 지도를 완성
+### 📍 Odometry Strategy (Lidar-based)
+일반적인 로봇과 달리 휠 엔코더 데이터에 의존하지 않고, 라이다 스캔 매칭 기술을 도입하여 위치 추정의 정확도를 확보했습니다.
+- **Node:** `rf2o_laser_odometry`
+- **Function:** 연속적인 레이저 스캔 데이터(Laser Scan) 간의 변위를 계산하여 평면 오도메트리(Planar Odometry) 생성
+- **TF Structure:** `odom` 프레임에서 `base_link`로의 좌표 변환(TF)을 실시간 브로드캐스팅
 
-**2. Navigation2 (Nav2) 파이프라인**
-- **SLAM:** `slam_toolbox`를 사용하여 실시간 지도 작성 및 위치 추정(Localization) 동시 수행
-- **Path Planning:**
-  - **Global Planner:** 전체 지도 기반의 최적 경로 산출
-  - **Local Planner:** 라이다 센서 데이터를 기반으로 동적 장애물을 회피하는 실시간 주행 제어
+### 🗺️ SLAM & Navigation Pipeline
+**1. Mapping (SLAM)**
+- `slam_toolbox`를 활용하여 실시간 격자 지도(Occupancy Grid Map) 생성
+- Loop Closure 기능을 통해 장시간 주행 시 발생하는 누적 위치 오차 보정
 
-**3. 좌표계 동기화 및 보정 (Coordinate Correction)**
-- **TF Tree:** `map` → `odom` → `base_link` → `laser`의 엄격한 좌표 변환 체계 구축
-- **MQTT 연동을 위한 좌표 변환 시스템:**
-  - ROS 2의 World 좌표계(RViz 기준, 원점 중앙)를 **Map Origin(지도의 좌하단)** 기준의 상대 좌표(Meters)로 실시간 변환
-  - 변환된 $x, y, \theta$ 데이터를 MQTT로 전송하여, 웹/앱 대시보드 상의 지도 이미지와 로봇의 실제 위치를 정확하게 매핑
+**2. Autonomous Navigation**
+- **Nav2 Stack:** Global Planner(A* 알고리즘)와 Local Planner(DWB Controller)를 연동하여 동적 장애물 회피 및 목표 지점 이동
+- **Auto Exploration:** `explore_lite` 패키지를 적용, 미탐사 영역(Frontier)을 스스로 감지하여 사용자 개입 없이 전체 지도를 완성
+
+### 🔄 Coordinate System & Data Bridge
+웹/앱 클라이언트에서 로봇의 위치를 지도의 정확한 지점에 표시하기 위해 독자적인 좌표 보정 시스템을 구축했습니다.
+
+- **TF Listener Node:** C++ 기반의 커스텀 노드가 `map` ↔ `base_link` 간의 TF 관계를 실시간 조회
+- **Map Origin Correction:**
+  - ROS의 World 좌표계(RViz 기준, $(0,0)$이 맵 중앙 등 임의 위치)를 **Map Origin(지도의 좌하단 구석)** 기준의 상대 좌표(Meters)로 변환
+  - 보정 공식: $P_{corrected} = P_{world} - P_{origin}$
+- **Integration:** 보정된 $x, y, \theta$ 좌표와 카메라 이미지를 동기화하여 MQTT 프로토콜로 전송
+
 ## 3. MQTT와 Qt GUI
 **MQTT** 로 GUI와 상태/명령/메타데이터를 주고받으며, **QT GUI** 가 맵/카메라/로그/게이지를 실시간 시각화하는 구조
 
